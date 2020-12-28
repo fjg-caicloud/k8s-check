@@ -1,4 +1,4 @@
-# LGg8Thin  ![alt text](https://github.com/cai-hd/LGg8Thin/blob/master/logo.png?raw=true)
+# LGg8Thin  ![](https://github.com/cai-hd/LGg8Thin/blob/master/logo.png?raw=true)
  Delivered platform check script
 
  
