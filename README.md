@@ -83,7 +83,7 @@ Lg g8 is a foreign rubbish mobile phone I bought on Taobao, Qualcomm 855 process
 * 不需要检查公网域名解析
 * 检查容器内域名解析
 * 检查主机域名解析
-* 检查顺丰科技内部域名解析
+* 检查pornhub内部域名解析
 * Pod连通性（避免全量检查引起网络波动）
 * 需要检查"Pod <-->外部网络（pod网关） "
 * Pod --> svc
