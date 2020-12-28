@@ -1,6 +1,11 @@
 # LGg8Thin
  Delivered platform check script
 
+ 
+Lg g8 is a foreign rubbish mobile phone I bought on Taobao, Qualcomm 855 processor 6+128 storage, I feel very good, because only spent 1,000 yuan, I felt the pleasure of the flagship model, I hope this project is also like this！
+
+
+
 
   
 
