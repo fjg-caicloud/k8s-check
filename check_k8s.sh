@@ -21,8 +21,10 @@ k8sConfDir="/etc/kubernetes"
 externalDomain=("www.sina.com" "www.baidu.com" "www.fujiangong.com" "lucky fjg")
 internalDomain=("kubernetes.default" "kube-dns.kube-system.svc.cluster.local")
 podStatusCheck=("Running" "Completed" "CrashLoopBackOff" "ImagePullBackOff" "ContainerCreating" "Terminating" "Error")
-tmpPodName="check-busybox-$(date +%F)"
+machineId=$(cat /etc/machine-id)
+tmpPodName="check-busybox-$machineId-$(date +%F)"
 clusterInfoDumpFile="$healthCheckDir/clusterInfo.dump"
+commandList=(echo curl netstat docker grep awk kubelet sed date cut openssl nmap base64 cat sort uniq read nc)
 
 if [ ! -d "$healthCheckDir" ]; then
  mkdir -p "$healthCheckDir"
@@ -52,11 +54,47 @@ yellow(){
     echo -e "\033[33m\033[01m $1 \033[0m"
 }
 
+check_command(){
+  green ".check command"
+  local checkPass="true"
+  for cmd in "${commandList[@]}";do
+    if ! command -v "$cmd" >& /dev/null;then
+      red "  └──[Error] command [$cmd] could not found!"
+      checkPass="false"
+    else
+      green "  └──[Info] command [$cmd] check pass"
+    fi
+  done
+  if [[ "$checkPass" == "false" ]];then
+    red "  └──[Error] some command not found!"
+    exit 1
+  fi
+}
+
+check_check_pod(){
+  green ".check $tmpPodName is running"
+  if ! kubectl get pods "$tmpPodName" --no-headers >& /dev/null;then
+    kubectl run "$tmpPodName" --image="$busyboxImage" --restart='Never' -- sleep 1h >& /dev/null
+    sleep 10s
+  fi
+  local podNum=$(kubectl get pods "$tmpPodName"|grep -c Running)
+  local checkTime=10
+  local checked=0
+  while [[ "$podNum" -ne 1 ]]&&[[ "$checked" -lt $checkTime ]] ;do
+    local podNum=$(kubectl get pods "$tmpPodName"|grep -c Running)
+    checked+=1
+  done
+  if [[ "$podNum" -ne 1 ]]&&[[ "$checked" -eq "$checkTime" ]];then
+    red "  └──[Error] check pod $tmpPodName not Running!!!!"
+    exit 1
+  fi
+}
+
 check_kube-apiserver() {
   green ".check apiserver"
   blue "├──check apiserver process"
   if ! netstat -ntlp|grep kube-api > /dev/null; then
-    red "  └──Error: service kube-apiserver process is not running"
+    red "  └──[Error] service kube-apiserver process is not running"
   else
     green "  └──[Info] apiserver process is exits"
     blue "├──check apiserver health"
@@ -456,9 +494,10 @@ check_node_to_apiserver(){
   fi
 }
 
-kubectl run "$tmpPodName" --image="$busyboxImage" --restart='Never' -- sleep 1h >& /dev/null
-sleep 5s
+
 # master and etcd 节点
+check_command
+check_check_pod
 check_kube-apiserver
 check_kube-controller-manager
 check_kube-scheduler
