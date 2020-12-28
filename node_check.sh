@@ -8,19 +8,22 @@ logCheckDays=7
 currentDay=$(date +%F)
 sinceLogDay=$(date +%F -d "$logCheckDays days ago")
 
-	#è¾“å‡ºuptimeå’Œè´Ÿè½½
+	#Êä³öuptimeºÍ¸ºÔØ
+check_uptime(){
 echo "[INFO] uptime is: `uptime`"
 echo "[INFO] load average is: `uptime |awk -F ':' '{print  $NF}'`"
-
-	#è¾“å‡ºèŠ‚ç‚¹CPUä½¿ç”¨çŽ‡
+}
+	#Êä³ö½ÚµãCPUÊ¹ÓÃÂÊ
   
-	#è¾“å‡ºèŠ‚ç‚¹å†…å­˜ä½¿ç”¨çŽ‡
+	#Êä³ö½ÚµãÄÚ´æÊ¹ÓÃÂÊ
   
-	#è¾“å‡ºç£ç›˜ä½¿ç”¨çŽ‡
+	#Êä³ö´ÅÅÌÊ¹ÓÃÂÊ
+check_diskUsage(){
 echo  -e "[INFO] disk usage:\n`df -Th / /app |grep -v  Filesystem  |awk '{print $(NF-1),$NF}'` "
-
+}
 	
-	#è¾“å‡ºç£ç›˜IOæƒ…å†µ
+	#Êä³ö´ÅÅÌIOÇé¿ö
+check_diskIO(){
 DISKS=$(ls /dev/sd[a-z] /dev/vd[a-z]  2>/dev/null)
 for d in $DISKS
   do
@@ -45,10 +48,11 @@ for d in $DISKS
 	avgW_await=$(cat $logFileName.log|grep -v "_x86_64_" |awk '{print $12}'|grep -v -E '^$|w_await'|awk '{sum+=$1} END {print sum/NR}')
 	echo -e "[INFO] disk $d:\nmaxReadIOPS:$maxReadIOPS\navgReadIOPS:$avgReadIOPS\nmaxWriteIOPS:$maxWriteIOPS\navgWriteIOPS:$avgWriteIOPS\nmaxReadKB:$maxReadKB\navgReadKB:$avgReadKB\nmaxWriteKB:$maxWriteKB\navgWriteKB:$avgWriteKB\nmaxAvgqu_sz:$maxAvgqu_sz\navgAvgqu_sz:$avgAvgqu_sz\nmaxAwait:$maxAwait\n"
   done
+}
 
 
-
-	#è¾“å‡ºç½‘å¡æƒ…å†µ,ç½‘å¡ä¸æ˜¯ethå¼€å¤´æ—¶ä¿®æ”¹æ­£åˆ™åŒ¹é…
+	#Êä³öÍø¿¨Çé¿ö,Íø¿¨²»ÊÇeth¿ªÍ·Ê±ÐÞ¸ÄÕýÔòÆ¥Åä
+check_nic(){
 NETDEV=$(ifconfig  -a |grep  -E  -o "^eth[0-9]*|^bond[0-9]*|^ens[0-9]*")
 sar -n DEV 1  30 1>/tmp/healthCheck/netStatus.log
 for n in $NETDEV
@@ -65,9 +69,12 @@ for n in $NETDEV
 	avgTxkBPercent=$(cat netStatus.log |grep $n|grep -v -E "veth*"|grep Average|awk '{print $6}')
 	echo -e "[INFO]NETDEV $n---\nStatus:$nicStatus\nmaxRxpckPercent:$maxRxpckPercent\nmaxTxpckPercent:$maxTxpckPercent\nmaxRxkBPercent:$maxRxkBPercent\nmaxTxkBPercent:$maxTxkBPercent\n"average is" $avgRxpckPercent $avgTxpckPercent $avgRxkBPercent $avgTxkBPercent\n---\n"
   done
+}
 
-	# è¾“å‡ºdockerçŠ¶æ€æ£€æŸ¥
-	## dockeræœåŠ¡çŠ¶æ€
+	# Êä³ödocker×´Ì¬¼ì²é
+	
+	## docker·þÎñ×´Ì¬
+check_docker(){
 dockerdIsActived=$(systemctl  is-active docker)
 if  [[ $dockerdIsActived == "active" ]]; then
    echo "[INFO]the dockerd process status is active"
@@ -75,7 +82,7 @@ if  [[ $dockerdIsActived == "active" ]]; then
    echo "[ERROR]the dockerd process is not running"
 fi
   
-	## docker ps æ²¡æœ‰hangä½
+	## docker ps Ã»ÓÐhang×¡
 dockerPsTMout=5s
 timeout  $dockerPsTMout docker ps  1>/dev/null 2>&1
 if [[ $? -eq 0 ]];then
@@ -86,7 +93,7 @@ fi
   
 
   
-  ## docker æè¿°ç¬¦
+  ## docker ÃèÊö·û
 dockerPid=$(ps aux |grep /bin/dockerd|grep -v grep |awk '{print $2}')
 if [[ ! -z $dockerPid ]] ;then
   dockerOpenfileLimit=$(cat /proc/$dockerPid/limits |grep files |awk '{print $(NF-1)}')
@@ -96,7 +103,7 @@ if [[ ! -z $dockerPid ]] ;then
 fi 
   
 
-  ## æ£€æŸ¥dockerå’Œcontainerdå®¹å™¨çŠ¶æ€æ˜¯å¦ä¸€è‡´
+  ## ¼ì²édockerºÍcontainerdÈÝÆ÷×´Ì¬ÊÇ·ñÒ»ÖÂ
  Upcontainers=$(docker ps |grep Up|awk '{print $1}')
  ctr --namespace moby --address /var/run/docker/containerd/containerd.sock  task  list 1>containerdTasks.list
   if [[ $? -eq 0 ]];then
@@ -110,19 +117,20 @@ fi
   fi
   
   
-  ## æ£€æŸ¥7å¤©å†…dockersæ—¥å¿—æ˜¯å¦æœ‰errorä¿¡æ¯
-  journalctl -x  --since $sinceLogDay   -u docker  1>docker.log
-  dockerLogs=$(grep -E -i "err|ERR|error|Error" docker.log)
+  ## ¼ì²é7ÌìÄÚdockersÈÕÖ¾ÊÇ·ñÓÐerrorÐÅÏ¢
+ journalctl -x  --since $sinceLogDay   -u docker  1>docker.log
+ dockerLogs=$(grep -E -i "err|ERR|error|Error" docker.log)
   if [[ ! -z $dockerLogs ]]; then
     echo  -e "[ERROR] docker error logs is: $dockerLogs\n\n"
   else
     echo  -e "[INFO] docker has no error logs\n\n"
   fi
 
+}
 
-
-  # è¾“å‡ºkubeletæ£€æŸ¥ç»“æžœ
-  ## kubeletè¿›ç¨‹çŠ¶æ€
+  # Êä³ökubelet¼ì²é½á¹û
+  ## kubelet½ø³Ì×´Ì¬
+check_kubelet(){
 kubeletIsActived=$(systemctl  is-active kubelet)
 if  [[ $kubeletIsActived == "active" ]]; then
    echo -e "[INFO]the kubelet processs  status is active\n"
@@ -130,7 +138,7 @@ else
    echo  -e "[ERROR] the kubelet  process is not running\n"
 fi
   
-  ## kubeletå¥åº·ç«¯å£æ£€æŸ¥
+  ## kubelet½¡¿µ¶Ë¿Ú¼ì²é
 kubeletCheckEndpoint=$(ss -tunlp|grep kubelet|grep 127.0.0.1|grep 10|awk '{print $5}')  
 kubeletCheckResult=$(curl $kubeletCheckEndpoint/healthz)
 if [[ $kubeletCheckResult == "ok" ]] ;then
@@ -139,17 +147,19 @@ else
   echo  -e "[ERROR]kubelet port health check not paased\n"
 fi
   
-  ## kubelet7å¤©å†…æ—¥å¿—
+  ## kubelet7ÌìÄÚÈÕÖ¾
 journalctl -x   --since $sinceLogDay   -u kubelet 1>kubelet.log 
 kubeletLogs=$(grep -E  "E[0-9]+|err|ERR|error|Error" kubelet.log)
 if [[ ! -z $kubeletLogs ]]; then
     echo -e "[ERROR]kubelet error logs is: $kubeletLogs\n\n"
 else
-    echo -e  "kubelet has no error logs\n\n"
+    echo -e  "[INFO] kubelet has no error logs\n\n"
 fi
   
-  # è¾“å‡ºkube-proxyæ£€æŸ¥ç»“æžœ
-  ## kube-proxy å¥åº·ç«¯å£æ£€æŸ¥
+}
+  # Êä³ökube-proxy¼ì²é½á¹û
+check_kube_proxy(){
+  ## kube-proxy ½¡¿µ¶Ë¿Ú¼ì²é
 kubeProxyCheckResult=$(curl 127.0.0.1:10249/healthz)
 if [[ $kubeProxyCheckResult == "ok" ]] ;then
   echo "[INFO] kube-proxy port health check passed"
@@ -157,7 +167,7 @@ else
   echo "[ERROR]kube-proxy port health check not paased"
 fi 
   
-  ## kube-proxyé”™è¯¯æ—¥å¿—è¿‡æ»¤ 
+  ## kube-proxy´íÎóÈÕÖ¾¹ýÂË 
 proxyContainerID=$(docker ps |grep kube-proxy|grep -v pause|awk '{print $1}')
 docker logs $proxyContainerID  -t --since $sinceLogDay  --details >& kube-proxy.log
 proxyLogs=$(grep -E  "E[0-9]+|error|Error" kube-proxy.log)
@@ -166,24 +176,28 @@ if [[ ! -z $proxyLogs ]]; then
 else
     echo -e "[INFO] kube-proxy has no error logs\n\n"
 fi
-  
+ 
+} 
 
- #æ£€æŸ¥æœ€å¤§æ–‡ä»¶æ‰“å¼€æ•°
+ #¼ì²é×î´óÎÄ¼þ´ò¿ªÊý
+check_openfiles(){
 openfileUsed=$(cat /proc/sys/fs/file-nr|awk '{print $1}')
 maxOpenfiles=$(cat /proc/sys/fs/file-nr|awk '{print $NF}')
 filePercentage=$(awk 'BEGIN{printf "%.1f%%\n",('$openfileUsed'/'$maxOpenfiles')*100}')
 pidMax=$(cat /proc/sys/kernel/pid_max)
 echo -e "[INFO] the node file and pid info:\nopenfileUsed:$openfileUsed\nmaxOpenfiles:$maxOpenfiles\nopenfileUsedPercentage:$filePercentage\npid-max:$pidMax\n"
+}
 
-
-  #conntrackä½¿ç”¨çŽ‡
+  #conntrackÊ¹ÓÃÂÊ
+check_nf_conntrack(){
 conntrackMax=$(cat /proc/sys/net/nf_conntrack_max) 
 usedConntrack=$(cat /proc/net/nf_conntrack |wc -l)
 usedConntrackPercentage=$(awk 'BEGIN{printf "%.1f%%\n",('$usedConntrack'/'$conntrackMax')*100}')
 echo -e "[INFO]the node conntrack info:\nconntrackMax:$conntrackMax\nusedConntrack:$usedConntrack\nPercentage:$usedConntrackPercentage\n"
-
+}
   
-  #Zè¿›ç¨‹æ£€æŸ¥
+  #Z½ø³Ì¼ì²é
+check_z_process(){
 ZNUM=$(top -n 1|grep Tasks|awk  -F',' '{print $NF}'|awk '{print $(NF-1)}' )
 if [[ $ZNUM == 0 ]];then
   echo -e  "[INFO] no found zombie process\n\n"
@@ -191,13 +205,17 @@ else
   ZTasks=$(ps -ef | grep defunct | grep -v grep)
   echo -e "[ERROR]found zombie process,the tasks is: $ZTasks\n\n"
 fi
-  
-
-  #æ—¶é—´å·®æ£€æŸ¥
+}
+  #Ê±¼ä²î¼ì²é
+check_ntp(){  
 chronyc sources
   
-  #messageæ—¥å¿—æ£€æŸ¥
+  #messageÈÕÖ¾¼ì²é
 echo -e "\n"
+}
+
+
+check_msg_logs(){
 messageLogs=$(grep -E "Container kill faild |\
 Container kill faild.count |\
 Trying direct SIGKILL |\
@@ -229,3 +247,18 @@ if [[ ! -z $messageLogs ]]; then
 else
     echo -e "[INFO] messages  has no found  error logs\n\n"
 fi
+}
+
+check_uptime
+check_diskUsage
+check_diskIO
+check_nic
+check_docker
+check_kubelet
+check_kube_proxy
+check_nf_conntrack
+check_openfiles
+check_z_process
+check_ntp
+check_msg_logs
+
