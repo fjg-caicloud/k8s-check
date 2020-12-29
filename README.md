@@ -1,5 +1,15 @@
-# LGg8Thin
+# LGg8Thin  ![](https://github.com/cai-hd/LGg8Thin/blob/main/logo.png?raw=true)
  Delivered platform check script
+
+ 
+Lg g8 is a foreign rubbish mobile phone I bought on Taobao, Qualcomm 855 processor 6+128 storage, I feel very good, because only spent 1,000 yuan, I felt the pleasure of the flagship model, I hope this project is also like this！
+
+# Awesome 
+![](https://github.com/cai-hd/LGg8Thin/blob/main/WechatIMG13.jpeg?raw=true)
+![](https://github.com/cai-hd/LGg8Thin/blob/main/WechatIMG14.jpeg?raw=true)
+
+![](https://github.com/cai-hd/LGg8Thin/blob/main/WechatIMG15.jpeg?raw=true)
+
 
 
   
@@ -73,7 +83,7 @@
 * 不需要检查公网域名解析
 * 检查容器内域名解析
 * 检查主机域名解析
-* 检查顺丰科技内部域名解析
+* 检查pornhub内部域名解析
 * Pod连通性（避免全量检查引起网络波动）
 * 需要检查"Pod <-->外部网络（pod网关） "
 * Pod --> svc
