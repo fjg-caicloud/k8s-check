@@ -1,28 +1,61 @@
 #!/bin/bash
 
 if [ ! -d /tmp/healthCheck ]; then
- mkdir -p /tmp/healthCheck && cd /tmp/healthCheck
+  mkdir -p /tmp/healthCheck && cd /tmp/healthCheck
 fi
 
 logCheckDays=7
 currentDay=$(date +%F)
 sinceLogDay=$(date +%F -d "$logCheckDays days ago")
 
-	#Êä³öuptimeºÍ¸ºÔØ
+maxLogSize=20480
+maxdiskUsagepercentage=85
+
+#å®šä¹‰æ—¥å¿—çš„æœ€å¤§å­—èŠ‚æ•°ï¼Œ20480B=20K
+checkLogSize(){
+  du -b $1 |awk -v size=$maxLogSize '{if($1>size){print false}else{print true}}'
+}
+
+blue(){
+    echo -e "\033[34m $1 \033[0m"
+}
+
+green(){
+    echo -e "\033[32m $1 \033[0m"
+}
+
+bred(){
+    echo -e "\033[31m\033[01m\033[05m $1 \033[0m"
+}
+
+byellow(){
+    echo -e "\033[33m\033[01m\033[05m $1 \033[0m"
+}
+
+red(){
+    echo -e "\033[31m\033[01m $1 \033[0m"
+}
+
+yellow(){
+    echo -e "\033[33m\033[01m $1 \033[0m"
+}
+
+
+	#è¾“å‡ºuptimeå’Œè´Ÿè½½
 check_uptime(){
 echo "[INFO] uptime is: `uptime`"
 echo "[INFO] load average is: `uptime |awk -F ':' '{print  $NF}'`"
 }
-	#Êä³ö½ÚµãCPUÊ¹ÓÃÂÊ
+	#è¾“å‡ºèŠ‚ç‚¹CPUä½¿ç”¨çŽ‡
   
-	#Êä³ö½ÚµãÄÚ´æÊ¹ÓÃÂÊ
+	#è¾“å‡ºèŠ‚ç‚¹å†…å­˜ä½¿ç”¨çŽ‡
   
-	#Êä³ö´ÅÅÌÊ¹ÓÃÂÊ
+	#è¾“å‡ºç£ç›˜ä½¿ç”¨çŽ‡
 check_diskUsage(){
 echo  -e "[INFO] disk usage:\n`df -Th / /app |grep -v  Filesystem  |awk '{print $(NF-1),$NF}'` "
 }
 	
-	#Êä³ö´ÅÅÌIOÇé¿ö
+	#è¾“å‡ºç£ç›˜IOæƒ…å†µ
 check_diskIO(){
 DISKS=$(ls /dev/sd[a-z] /dev/vd[a-z]  2>/dev/null)
 for d in $DISKS
@@ -51,7 +84,7 @@ for d in $DISKS
 }
 
 
-	#Êä³öÍø¿¨Çé¿ö,Íø¿¨²»ÊÇeth¿ªÍ·Ê±ÐÞ¸ÄÕýÔòÆ¥Åä
+	#è¾“å‡ºç½‘å¡æƒ…å†µ,ç½‘å¡ä¸æ˜¯ethå¼€å¤´æ—¶ä¿®æ”¹æ­£åˆ™åŒ¹é…
 check_nic(){
 NETDEV=$(ifconfig  -a |grep  -E  -o "^eth[0-9]*|^bond[0-9]*|^ens[0-9]*")
 sar -n DEV 1  30 1>/tmp/healthCheck/netStatus.log
@@ -71,9 +104,9 @@ for n in $NETDEV
   done
 }
 
-	# Êä³ödocker×´Ì¬¼ì²é
+	# è¾“å‡ºdockerçŠ¶æ€æ£€æŸ¥
 	
-	## docker·þÎñ×´Ì¬
+	## dockeræœåŠ¡çŠ¶æ€
 check_docker(){
 dockerdIsActived=$(systemctl  is-active docker)
 if  [[ $dockerdIsActived == "active" ]]; then
@@ -82,7 +115,7 @@ if  [[ $dockerdIsActived == "active" ]]; then
    echo "[ERROR]the dockerd process is not running"
 fi
   
-	## docker ps Ã»ÓÐhang×¡
+	## docker ps æ²¡æœ‰hangä½
 dockerPsTMout=5s
 timeout  $dockerPsTMout docker ps  1>/dev/null 2>&1
 if [[ $? -eq 0 ]];then
@@ -93,7 +126,7 @@ fi
   
 
   
-  ## docker ÃèÊö·û
+  ## docker æè¿°ç¬¦
 dockerPid=$(ps aux |grep /bin/dockerd|grep -v grep |awk '{print $2}')
 if [[ ! -z $dockerPid ]] ;then
   dockerOpenfileLimit=$(cat /proc/$dockerPid/limits |grep files |awk '{print $(NF-1)}')
@@ -103,33 +136,36 @@ if [[ ! -z $dockerPid ]] ;then
 fi 
   
 
-  ## ¼ì²édockerºÍcontainerdÈÝÆ÷×´Ì¬ÊÇ·ñÒ»ÖÂ
+  ## æ£€æŸ¥dockerå’Œcontainerdå®¹å™¨çŠ¶æ€æ˜¯å¦ä¸€è‡´
+if which ctr &>/dev/null;then
  Upcontainers=$(docker ps |grep Up|awk '{print $1}')
  ctr --namespace moby --address /var/run/docker/containerd/containerd.sock  task  list 1>containerdTasks.list
   if [[ $? -eq 0 ]];then
-    for i in $Upcontainers
-      do
-	     cat containerdTasks.list|grep $i |grep -q  RUNNING
+	for i in $Upcontainers
+	  do
+		 cat containerdTasks.list|grep $i |grep -q  RUNNING
 		 if [[ $? -ne 0 ]];then
 		   echo "[ERROR] the abnormal container ID is: $i"
 		 fi
 	  done
   fi
+fi	  
   
-  
-  ## ¼ì²é7ÌìÄÚdockersÈÕÖ¾ÊÇ·ñÓÐerrorÐÅÏ¢
- journalctl -x  --since $sinceLogDay   -u docker  1>docker.log
- dockerLogs=$(grep -E -i "err|ERR|error|Error" docker.log)
-  if [[ ! -z $dockerLogs ]]; then
-    echo  -e "[ERROR] docker error logs is: $dockerLogs\n\n"
-  else
+  ## æ£€æŸ¥7å¤©å†…dockersæ—¥å¿—æ˜¯å¦æœ‰errorä¿¡æ¯
+journalctl -x  --since $sinceLogDay   -u docker  1>docker-$currentDay.log
+grep -E -i "err|ERR|error|Error" docker-$currentDay.log 1>docker-$currentDay-Error.log
+if [[ ! -z $(cat docker-$currentDay-Error.log) ]] && $(checkLogSize docker-$currentDay-Error.log); then
+  echo  -e "[ERROR] docker error logs is: $(cat docker-$currentDay-Error.log)\n\n"
+elif [[ -z $(cat docker-$currentDay-Error.log) ]];then
     echo  -e "[INFO] docker has no error logs\n\n"
-  fi
+else
+  echo -e "[ERROR] docker error logs is too large,log file in /tmp/healthCheck/docker-$currentDay-Error.log"
+fi
 
 }
 
-  # Êä³ökubelet¼ì²é½á¹û
-  ## kubelet½ø³Ì×´Ì¬
+  # è¾“å‡ºkubeletæ£€æŸ¥ç»“æžœ
+  ## kubeletè¿›ç¨‹çŠ¶æ€
 check_kubelet(){
 kubeletIsActived=$(systemctl  is-active kubelet)
 if  [[ $kubeletIsActived == "active" ]]; then
@@ -138,7 +174,7 @@ else
    echo  -e "[ERROR] the kubelet  process is not running\n"
 fi
   
-  ## kubelet½¡¿µ¶Ë¿Ú¼ì²é
+  ## kubeletå¥åº·ç«¯å£æ£€æŸ¥
 kubeletCheckEndpoint=$(ss -tunlp|grep kubelet|grep 127.0.0.1|grep 10|awk '{print $5}')  
 kubeletCheckResult=$(curl $kubeletCheckEndpoint/healthz)
 if [[ $kubeletCheckResult == "ok" ]] ;then
@@ -147,19 +183,21 @@ else
   echo  -e "[ERROR]kubelet port health check not paased\n"
 fi
   
-  ## kubelet7ÌìÄÚÈÕÖ¾
-journalctl -x   --since $sinceLogDay   -u kubelet 1>kubelet.log 
-kubeletLogs=$(grep -E  "E[0-9]+|err|ERR|error|Error" kubelet.log)
-if [[ ! -z $kubeletLogs ]]; then
-    echo -e "[ERROR]kubelet error logs is: $kubeletLogs\n\n"
+  ## kubelet7å¤©å†…æ—¥å¿—
+journalctl -x   --since $sinceLogDay   -u kubelet 1>kubelet-$currentDay.log 
+grep -E  "E[0-9]+|err|ERR|error|Error" kubelet-$currentDay.log 1>kubelet-$currentDay-Error.log
+if [[ ! -z $(cat kubelet-$currentDay-Error.log) ]] && $(checkLogSize kubelet-$currentDay-Error); then
+  echo  -e "[ERROR] kubelet error logs is: $(cat kubelet-$currentDay-Error.log)\n\n"
+elif [[ -z $(cat kubelet-$currentDay-Error.log) ]];then
+  echo  -e "[INFO] kubelet has no error logs\n\n"
 else
-    echo -e  "[INFO] kubelet has no error logs\n\n"
+  echo -e "[ERROR] kubelet error logs is too large,log file in /tmp/healthCheck/kubelet-$currentDay-Error.log"
 fi
   
 }
-  # Êä³ökube-proxy¼ì²é½á¹û
+  # è¾“å‡ºkube-proxyæ£€æŸ¥ç»“æžœ
 check_kube_proxy(){
-  ## kube-proxy ½¡¿µ¶Ë¿Ú¼ì²é
+  ## kube-proxy å¥åº·ç«¯å£æ£€æŸ¥
 kubeProxyCheckResult=$(curl 127.0.0.1:10249/healthz)
 if [[ $kubeProxyCheckResult == "ok" ]] ;then
   echo "[INFO] kube-proxy port health check passed"
@@ -167,19 +205,20 @@ else
   echo "[ERROR]kube-proxy port health check not paased"
 fi 
   
-  ## kube-proxy´íÎóÈÕÖ¾¹ýÂË 
+  ## kube-proxyé”™è¯¯æ—¥å¿—è¿‡æ»¤ 
 proxyContainerID=$(docker ps |grep kube-proxy|grep -v pause|awk '{print $1}')
-docker logs $proxyContainerID  -t --since $sinceLogDay  --details >& kube-proxy.log
-proxyLogs=$(grep -E  "E[0-9]+|error|Error" kube-proxy.log)
-if [[ ! -z $proxyLogs ]]; then
-    echo -e "[ERROR]kube-proxy  error logs is: $proxyLogs\n\n"
+docker logs $proxyContainerID  -t --since $sinceLogDay  --details >& kube-proxy-$currentDay.log
+grep -E  "E[0-9]+|err|ERR|error|Error" kube-proxy-$currentDay.log 1>kube-proxy-$currentDay-Error.log
+if [[ ! -z $(cat kube-proxy-$currentDay-Error.log) ]] && $(checkLogSize kube-proxy-$currentDay-Error.log); then
+  echo  -e "[ERROR] kube-proxy error logs is: $(cat kube-proxy-$currentDay-Error.log)\n\n"
+elif [[ -z $(cat kubelet-$currentDay-Error.log) ]];then
+  echo  -e "[INFO]kube-proxy has no error logs\n\n"
 else
-    echo -e "[INFO] kube-proxy has no error logs\n\n"
+  echo -e "[ERROR] kube-proxy error logs is too large,log file in /tmp/healthCheck/kube-proxy-$currentDay-Error.log"
 fi
- 
 } 
 
- #¼ì²é×î´óÎÄ¼þ´ò¿ªÊý
+ #æ£€æŸ¥æœ€å¤§æ–‡ä»¶æ‰“å¼€æ•°
 check_openfiles(){
 openfileUsed=$(cat /proc/sys/fs/file-nr|awk '{print $1}')
 maxOpenfiles=$(cat /proc/sys/fs/file-nr|awk '{print $NF}')
@@ -188,7 +227,7 @@ pidMax=$(cat /proc/sys/kernel/pid_max)
 echo -e "[INFO] the node file and pid info:\nopenfileUsed:$openfileUsed\nmaxOpenfiles:$maxOpenfiles\nopenfileUsedPercentage:$filePercentage\npid-max:$pidMax\n"
 }
 
-  #conntrackÊ¹ÓÃÂÊ
+  #conntrackä½¿ç”¨çŽ‡
 check_nf_conntrack(){
 conntrackMax=$(cat /proc/sys/net/nf_conntrack_max) 
 usedConntrack=$(cat /proc/net/nf_conntrack |wc -l)
@@ -196,7 +235,7 @@ usedConntrackPercentage=$(awk 'BEGIN{printf "%.1f%%\n",('$usedConntrack'/'$connt
 echo -e "[INFO]the node conntrack info:\nconntrackMax:$conntrackMax\nusedConntrack:$usedConntrack\nPercentage:$usedConntrackPercentage\n"
 }
   
-  #Z½ø³Ì¼ì²é
+  #Zè¿›ç¨‹æ£€æŸ¥
 check_z_process(){
 ZNUM=$(top -n 1|grep Tasks|awk  -F',' '{print $NF}'|awk '{print $(NF-1)}' )
 if [[ $ZNUM == 0 ]];then
@@ -206,17 +245,16 @@ else
   echo -e "[ERROR]found zombie process,the tasks is: $ZTasks\n\n"
 fi
 }
-  #Ê±¼ä²î¼ì²é
+  #æ—¶é—´å·®æ£€æŸ¥
 check_ntp(){  
+echo -e "[INFO] the NTP time info is:"
 chronyc sources
-  
-  #messageÈÕÖ¾¼ì²é
 echo -e "\n"
 }
 
-
+ #messageæ—¥å¿—æ£€æŸ¥
 check_msg_logs(){
-messageLogs=$(grep -E "Container kill faild |\
+grep -E "Container kill faild |\
 Container kill faild.count |\
 Trying direct SIGKILL |\
 Container kill faild because of 'container not found' or 'no sudh process' |\
@@ -240,12 +278,14 @@ Device offlined |\
 Unrecoverable medium error during recovery on PD |\
 tx_timeout |\
 Container runtime is down PLEG is not healthy |\
-_Call_Trace"  /var/log/messages)
+_Call_Trace"  /var/log/messages 1>message-$currentDay-Error.log
 
-if [[ ! -z $messageLogs ]]; then
-    echo -e "[ERROR]messages  error logs is: $messageLogs\n\n"
+if [[ ! -z $(cat message-$currentDay-Error.log) ]] && $(checkLogSize message-$currentDay-Error.log); then
+  echo  -e "[ERROR] message  error logs is: $(cat message-$currentDay-Error.log)\n\n"
+elif [[ -z $(cat message-$currentDay-Error.log) ]];then
+  echo  -e "[INFO]messages has no error logs\n\n"
 else
-    echo -e "[INFO] messages  has no found  error logs\n\n"
+  echo -e "[ERROR] message error logs is too large,log file in /tmp/healthCheck/message-$currentDay-Error.log"
 fi
 }
 
