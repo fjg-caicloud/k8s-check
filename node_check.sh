@@ -155,7 +155,7 @@ fi
 journalctl -x  --since $sinceLogDay   -u docker  1>docker-$currentDay.log
 grep -E -i "err|ERR|error|Error" docker-$currentDay.log 1>docker-$currentDay-Error.log
 if [[ $(checkLogSize docker-$currentDay-Error.log) == "true" ]];then
-	if [[  -s  docker-$currentDay-Error.log) ]]; then
+	if [[  -s  docker-$currentDay-Error.log ]]; then
 	  echo  -e "[ERROR] docker error logs is: $(cat docker-$currentDay-Error.log)\n\n"
 	else
 		echo  -e "[INFO] docker has no error logs\n\n"
@@ -188,7 +188,7 @@ fi
 journalctl -x   --since $sinceLogDay   -u kubelet 1>kubelet-$currentDay.log 
 grep -E  "E[0-9]+|err|ERR|error|Error" kubelet-$currentDay.log 1>kubelet-$currentDay-Error.log
 if [[ $(checkLogSize kubelet-$currentDay-Error.log) == "true" ]];then
-	if [[  -s  kubelet-$currentDay-Error.log) ]]; then
+	if [[  -s  kubelet-$currentDay-Error.log ]]; then
 	  echo  -e "[ERROR] kubelet error logs is: $(cat kubelet-$currentDay-Error.log)\n\n"
 	else
 		echo  -e "[INFO] kubelet has no error logs\n\n"
@@ -213,7 +213,7 @@ if [[ ! -z $proxyContainerID ]]; then
 	docker logs $proxyContainerID  -t --since $sinceLogDay  --details >& kube-proxy-$currentDay.log
 	grep -E  "E[0-9]+|err|ERR|error|Error" kube-proxy-$currentDay.log 1>kube-proxy-$currentDay-Error.log
 	if [[ $(checkLogSize kube-proxy-$currentDay-Error.log) == "true" ]];then
-	  if [[  -s  kube-proxy-$currentDay-Error.log) ]]; then
+	  if [[  -s  kube-proxy-$currentDay-Error.log ]]; then
 	    echo  -e "[ERROR] kube-proxy error logs is: $(cat kube-proxy-$currentDay-Error.log)\n\n"
 	  else
 		echo  -e "[INFO] kube-proxy has no error logs\n\n"
@@ -222,7 +222,7 @@ if [[ ! -z $proxyContainerID ]]; then
      echo -e "[ERROR] kube-proxy error logs is too large,log file in $healthLogDir/kube-proxy-$currentDay-Error.log"
    fi
 else
-    
+    echo -e "[ERROR] no found  kube-proxy containerd this node"
 fi
 } 
 
@@ -289,7 +289,7 @@ Container runtime is down PLEG is not healthy |\
 _Call_Trace"  /var/log/messages 1>message-$currentDay-Error.log
 
 if [[ $(checkLogSize message-$currentDay-Error.log) == "true" ]];then
-  if [[  -s  message-$currentDay-Error.log) ]]; then
+  if [[  -s  message-$currentDay-Error.log ]]; then
 	echo  -e "[ERROR] message error logs is: $(cat message-$currentDay-Error.log)\n\n"
   else
 	echo  -e "[INFO] message has no error logs\n\n"
@@ -299,6 +299,37 @@ else
 fi
 }
 
+
+check_weaver_node(){
+ curl  127.0.0.1:6784/status  1>weaver-status-$currentDay.txt
+ curl  127.0.0.1:6784/status/connections 1>weaver-connections-$currentDay.txt
+ curl  127.0.0.1:6784/ip |jq .  1>weaver-ip-$currentDay.txt
+ weaverStatus=$(cat weaver-status-$currentDay.txt |grep  Status|awk -F":| " '{print $NF}')
+ if [[ $weaverStatus == "ready" ]]; then
+   echo  -e "[info]weaver is ready in this node\n\n"
+ else
+   echo -e "[ERROR]weaver is  not ready in this node\n\n"
+ fi
+ 
+ weaverEstablishNum=$(cat weaver-connections-$currentDay.txt |grep -v self|grep  established |wc -l)
+ weaverFastdpNum=$(cat weaver-connections-$currentDay.txt |grep -v self|grep fastdp|wc -l)
+ if [[ $weaverEstablishNum == $weaverFastdpNum ]];then
+   echo -e "[info]the weaver connection check passed\n\n"
+ else 
+   wrongConnection=$(cat weaver-connections-$currentDay.txt |grep  establish|grep -v fastdp)
+   echo -e "[ERROR]found wrong connections:\n$wrongConnection\n\n"
+ fi
+ 
+ cat weaver-ip-$currentDay.txt |jq '.owned[]|{id:.containerid,addr:.addrs[0]}'|grep -E -v ^$|grep -v -E  '{|}'|xargs  -n4 1>weaver-ip-$currentDay-modify.txt
+ 
+ weaverBadIP=$(cat weaver-ip-$currentDay-modify.txt|awk -F',|:' '{print $2}'|grep -E '(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])')
+ 
+ if [[ ! -z $weaverBadIP ]]; then
+   echo -e "[ERROR]found weaver disclose IP is:\n$weaverBadIP\n\n"
+ else
+   echo -e "[INFO] no found weaver disclose IP"
+ fi
+}
 check_uptime
 check_diskUsage
 check_diskIO
@@ -311,4 +342,4 @@ check_openfiles
 check_z_process
 check_ntp
 check_msg_logs
-
+check_weaver_node
