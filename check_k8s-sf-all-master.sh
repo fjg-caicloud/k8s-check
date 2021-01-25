@@ -1,29 +1,29 @@
 #!/bin/bash
-:<<EOF
+: <<EOF
 @author:fjg
-@license: Apache Licence
-@file: check_k8s.sh
-@time: 2020/12/24
+@license: Apache Licence 
+@file: check_k8s-sf-all-master.sh.sh
+@time: 2021/01/25
 @contact: fujiangong.fujg@bytedance.com
-@site:
-@software: PyCharm
-
-脚本中使用到的命令:
-echo、curl、netstat、docker、grep、awk、kubelet、sed、date、cut、openssl、nmap、base64、cat、sort、uniq、read、nc
+@site:  
+@software: PyCharm 
 EOF
 
 logCheckDay=1
 certCheckDay=14
 podRestartCheckNum=20
-busyboxImage="busybox:1.28.0"
+clusterRequestCheckPercent=80
+busyboxImage="busybox:1.27.2"
 healthCheckDir="/tmp/healthCheck"
 k8sConfDir="/etc/kubernetes"
 externalDomain=("www.sina.com" "www.baidu.com" "www.fujiangong.com" "lucky fjg")
 internalDomain=("kubernetes.default" "kube-dns.kube-system.svc.cluster.local")
 podStatusCheck=("Running" "Completed" "CrashLoopBackOff" "ImagePullBackOff" "ContainerCreating" "Terminating" "Error")
 machineId=$(cat /etc/machine-id)
-tmpPodName="check-busybox-$machineId-$(date +%F)"
-commandList=(echo curl netstat docker grep awk kubelet sed date cut openssl nmap base64 cat sort uniq read nc host)
+tmpPodName="check-pod-$machineId-$(date +%F)"
+commandList=(echo curl netstat docker grep awk kubelet sed date cut openssl base64 cat sort uniq read host)
+maxLogSize=20480
+etcdConfigFile="/etc/etcd/cfg/etcd.conf"
 
 if [ ! -d "$healthCheckDir" ]; then
  mkdir -p "$healthCheckDir"
@@ -70,6 +70,10 @@ check_command(){
   fi
 }
 
+check_file_size(){
+  du -b "$1" |awk -v size="$maxLogSize" '{if($1>size){print "true"}else{print "false"}}'
+}
+
 check_check_pod(){
   green ".check $tmpPodName pods status"
   if ! kubectl get pods "$tmpPodName" --no-headers >& /dev/null;then
@@ -86,7 +90,10 @@ check_check_pod(){
   done
   if [[ "$podNum" -ne 1 ]]&&[[ "$checked" -eq "$checkTime" ]];then
     red "  └──[Error] check pod $tmpPodName not Running!!!!"
+    kubectl delete pods "$tmpPodName" --force >& /dev/null
     exit 1
+  else
+    green "  └──[Info] pod $tmpPodName is Running!"
   fi
 }
 
@@ -116,24 +123,19 @@ get_check_data() {
   blue "└──get ns kube-system svc ip and port"
   svcListFile="$healthCheckDir/nsSvcList.txt"
   kubectl get svc -oyaml -o=custom-columns=NAME:.metadata.name,CLUSTER-IP:.spec.clusterIP,PORT:.spec.ports[0].port --no-headers -n kube-system|grep -iv none > "$svcListFile"
-  blue "└──get cluster info dump"
-  clusterInfoDumpFile="$healthCheckDir/clusterInfo.dump"
-  kubectl cluster-info dump >& "$clusterInfoDumpFile"
+  blue "└──get weave pods list"
+  weavePodsFile="$healthCheckDir/weavePodsList.txt"
+  kubectl get pods -n kube-system -l name=weave-net -o wide --no-headers > "$weavePodsFile"
 }
 
 check_kube-apiserver() {
   green ".check apiserver"
   blue "└──check apiserver process"
-  if ! netstat -ntlp|grep kube-api > /dev/null; then
+  if ! ss -ntlp|grep kube-api > /dev/null; then
     red "  └──[Error] service kube-apiserver process is not running"
   else
     green "  └──[Info] apiserver process is exits"
     blue "└──check apiserver health"
-  #  grep client-cert ~/.kube/config |cut -d" " -f 6|base64 -d > "$healthCheckDir"/apiserver-client.crt
-  #  grep client-key-data ~/.kube/config |cut -d" " -f 6|base64 -d > "$healthCheckDir"/apiserver-client.key
-  #  grep certificate-authority-data ~/.kube/config |cut -d" " -f 6|base64 -d > "$healthCheckDir"/apiserver-ca.crt
-  #  local apiserver=$(kubectl config view |grep server|awk -F "server: " '{print $2}')
-  #  local serverStatus=$(curl -s --cert "$healthCheckDir"/apiserver-client.crt --key "$healthCheckDir"/apiserver-client.key --cacert "$healthCheckDir"/apiserver-ca.crt "$apiserver"/healthz)
     local healthUrl="https://localhost:6443/healthz"
     local serverStatus=$(curl -sk "$healthUrl")
     if [[ "$serverStatus" == "ok" ]];then
@@ -144,13 +146,17 @@ check_kube-apiserver() {
     blue "└──check apiserver [Error] log"
     local dockerId=$(docker ps|grep -v pause|grep apiserver|awk '{print $1}')
     docker logs --since $((logCheckDay * 24))h "$dockerId" --details >& "$healthCheckDir"/apiserver.log
-    local errorLog=$(grep "^ E" "$healthCheckDir"/apiserver.log)
-    if [[ "$errorLog" != "" ]];then
-      red "  └──[Error] apiserver container $dockerId has error log in $logCheckDay days"
-      red "$(grep "^ E" "$healthCheckDir"/apiserver.log|sed s'/^/      /')"
-#      red "    └──$errorLog"
+    local errorLogFile="$healthCheckDir/apiserver-error.log"
+    grep "^ E" "$healthCheckDir"/apiserver.log > $errorLogFile
+    if [[ -s "$errorLogFile" ]];then
+      if [[ $(check_file_size "$errorLogFile") == "false" ]];then
+        red "  └──[Error] apiserver container $dockerId has error log in $logCheckDay days"
+        red "$(sed s'/^/      /' "$errorLogFile")"
+      else
+        red "  └──[Error] logs file $errorLogFile greater than $maxLogSize，Please view the file yourself"
+      fi
     else
-      green "  └──no [error] log in $logCheckDay days"
+      green "  └──[Info] no [error] log in $logCheckDay days"
     fi
   fi
 }
@@ -158,7 +164,7 @@ check_kube-apiserver() {
 check_kube-scheduler() {
   green ".check kube-scheduler"
   blue "└──check apiserver process"
-  if ! netstat -ntlp|grep kube-schedule > /dev/null; then
+  if ! ss -ntlp|grep kube-schedule > /dev/null; then
     red "  └──[Error] service kube-schedule is not running"
   else
     green "  └──[Info] scheduler process is exits"
@@ -173,20 +179,25 @@ check_kube-scheduler() {
     blue "└──check scheduler [Error] log"
     local dockerId=$(docker ps|grep -v pause|grep scheduler|awk '{print $1}')
     docker logs --since $((logCheckDay * 24))h "$dockerId" --details >& "$healthCheckDir"/scheduler.log
-    local errorLog=$(grep "^ E" "$healthCheckDir"/scheduler.log)
-    if [[ "$errorLog" != "" ]];then
-      red "  └──[Error] scheduler container $dockerId has error log in $logCheckDay days"
-      red "$(grep "^ E" "$healthCheckDir"/scheduler.log|sed s'/^/      /')"
+    local errorLogFile="$healthCheckDir/scheduler-error.log"
+    grep "^ E" "$healthCheckDir"/scheduler.log > $errorLogFile
+    if [[ -s "$errorLogFile" ]];then
+      if [[ $(check_file_size "$errorLogFile") == "false" ]];then
+        red "  └──[Error] apiserver container $dockerId has error log in $logCheckDay days"
+        red "$(sed s'/^/      /' "$errorLogFile")"
+      else
+        red "  └──[Error] logs file $errorLogFile greater than $maxLogSize，Please view the file yourself"
+      fi
     else
-      green "  └──no [error] log in $logCheckDay days"
+      green "  └──[Info] no [error] log in $logCheckDay days"
     fi
   fi
 }
 
 check_kube-controller-manager() {
   green ".check kube-controll"
-  blue "└──check kube-controll health"
-  if ! netstat -ntlp|grep kube-controll > /dev/null; then
+  blue "└──check kube-controll process"
+  if ! ss -ntlp|grep kube-controll > /dev/null; then
     red "  └──[Error] service kube-controll is not running"
   else
     green "  └──[info] kube-controll process is exits"
@@ -201,10 +212,15 @@ check_kube-controller-manager() {
     blue "└──check kube-controll [Error] log"
     local dockerId=$(docker ps|grep -v pause|grep kube-controll|awk '{print $1}')
     docker logs --since $((logCheckDay * 24))h "$dockerId" --details >& "$healthCheckDir"/kube-controll.log
-    local errorLog=$(grep "^ E" "$healthCheckDir"/kube-controll.log)
-    if [[ "$errorLog" != "" ]];then
-      red "  └──[Error] kube-controll container $dockerId has [error] log in $logCheckDay days"
-      red "$(grep "^ E" "$healthCheckDir"/kube-controll.log|sed s'/^/      /')"
+    local errorLogFile="$healthCheckDir/kube-controll-error.log"
+    grep "^ E" "$healthCheckDir"/kube-controll.log > $errorLogFile
+    if [[ -s "$errorLogFile" ]];then
+      if [[ $(check_file_size "$errorLogFile") == "false" ]];then
+        red "  └──[Error] apiserver container $dockerId has error log in $logCheckDay days"
+        red "$(sed s'/^/      /' "$errorLogFile")"
+      else
+        red "  └──[Error] logs file $errorLogFile greater than $maxLogSize，Please view the file yourself"
+      fi
     else
       green "  └──[Info] no [error] log in $logCheckDay days"
     fi
@@ -213,33 +229,58 @@ check_kube-controller-manager() {
 
 check_etcd() {
   green ".check etcd"
-  if ! netstat -ntlp|grep etcd > /dev/null; then
+  blue "└──check etcd process"
+  if ! ss -ntlp|grep etcd > /dev/null; then
     red "  └──[Error] service etcd is not running"
   else
     green "  └──[info] etcd process is exits"
-#    blue "└──check etcd health"
-#    local healthUrl="http://localhost:2381/health"
-#    local serverStatus=$(curl -s "$healthUrl"|awk -F :\" '{print $2 }'|cut -d \" -f  1)
-#    if [[ "$serverStatus" == "true" ]];then
-#      green  "  └──[info] etcd health check is ok"
-#    else
-#      red  "  └──[Error] etcd health check is $serverStatus"
-#    fi
-    blue "└──check etcd [Error] log"
-    local dockerId=$(docker ps|grep -v pause|grep etcd|awk '{print $1}')
-    docker logs --since $((logCheckDay * 24))h "$dockerId" --details >& "$healthCheckDir"/etcd.log
-    local errorLog=$(grep "E |" "$healthCheckDir"/etcd.log)
-    if [[ "$errorLog" != "" ]];then
-      red "  └──[Error] etcd container $dockerId has [error] log in $logCheckDay days"
-      red "$(grep "E |" "$healthCheckDir"/etcd.log|sed s'/^/      /')"
+    blue "└──check etcd service is active"
+    local serverStatus=$(systemctl is-active etcd)
+    if [[ "$serverStatus" == "active" ]];then
+      green  "  └──[info] etcd server status is active"
     else
-      green "  └──[Info] no [error] log"
+      red  "  └──[Error] etcd health check isn't active。$serverStatus"
+    fi
+    blue "└──check etcd cluster health"
+    # shellcheck source=$etcdConfigFile
+    source $etcdConfigFile
+    local endpoints=$(ETCDCTL_API=3 $(which etcdctl) --cacert="$ETCD_CA_FILE" --cert="$ETCD_CERT_FILE" --key="$ETCD_KEY_FILE" --endpoints=https://127.0.0.1:2379 member list|awk '{print $NF}'|tr '\n' ',')
+    local endpointHealthFile="$healthCheckDir/etcd-endpoint-health.log"
+    ETCDCTL_API=3 $(which etcdctl) --cacert="$ETCD_CA_FILE" --cert="$ETCD_CERT_FILE" --key="$ETCD_KEY_FILE" --endpoints="${endpoints%,}" endpoint health > "$endpointHealthFile"
+    while IFS= read -r endpoint;do
+      local endpointStatus=$(echo "$endpoint"|awk '{print $3}')
+      local endpointUrl=$(echo "$endpoint"|awk '{print $1}')
+      if [[ "$endpointStatus" == "healthy:" ]];then
+        green "  └──[info] $endpointUrl health check is ${endpointStatus%:}"
+      else
+        red "  └──[Error] $endpointUrl health check is ${endpointStatus%:}"
+      fi
+    done < "$endpointHealthFile"
+    blue "└──check etcd [Error] log"
+    local etcdLogFile="$healthCheckDir/etcd.log"
+    journalctl -x --since "$(date +%F -d "$logCheckDay days ago")" -u etcd 1 >$etcdLogFile
+    local errorLogFile="$healthCheckDir/etcd-error.log"
+    grep "E |" "$etcdLogFile" > $errorLogFile
+    if [[ -s "$errorLogFile" ]];then
+      if [[ $(check_file_size "$errorLogFile") == "false" ]];then
+        red "  └──[Error] etcd has error log in $logCheckDay days"
+        red "$(sed s'/^/      /' "$errorLogFile")"
+      else
+        red "  └──[Error] logs file $errorLogFile greater than $maxLogSize，Please view the file yourself"
+      fi
+    else
+      green "  └──[Info] no [error] log in $logCheckDay days"
     fi
     blue "└──check etcd [too long] log"
-    local tooLongLog=$(grep "too long" "$healthCheckDir"/etcd.log)
-    if [[ "$tooLongLog" != "" ]];then
-      red "  └──[warning] etcd container $dockerId has [too long] log in $logCheckDay days"
-      red "$(grep "too long" "$healthCheckDir"/etcd.log|sed s'/^/      /')"
+    local tooLongLogFile="$healthCheckDir/etcd-too-long.log"
+    grep "too long" "$etcdLogFile" > $tooLongLogFile
+    if [[ -s "$tooLongLogFile" ]];then
+      if [[ $(check_file_size "$tooLongLogFile") == "false" ]];then
+        red "  └──[Error] etcd has error log in $logCheckDay days"
+        red "$(sed s'/^/      /' "$tooLongLogFile")"
+      else
+        red "  └──[Error] logs file $tooLongLogFile greater than $maxLogSize，Please view the file yourself"
+      fi
     else
       green "  └──[Info] no [too long] log in $logCheckDay days"
     fi
@@ -280,9 +321,15 @@ check_cert() {
     check_cert_time "$cert"
   done
   blue "└──check etcd cert"
-  for cert in "$k8sConfDir"/pki/etcd/*.crt;do
-    check_cert_time "$cert"
-  done
+  # shellcheck source=$etcdConfigFile
+  source $etcdConfigFile
+  check_cert_time "$ETCD_CA_FILE"
+  check_cert_time "$ETCD_CERT_FILE"
+  check_cert_time "$ETCD_PEER_CA_FILE"
+  check_cert_time "$ETCD_PEER_CERT_FILE"
+#  for cert in "$k8sConfDir"/pki/etcd/*.crt;do
+#    check_cert_time "$cert"
+#  done
   blue "└──check conf cert"
   cd "$k8sConfDir" || exit
   for conf in *.conf;do
@@ -292,18 +339,15 @@ check_cert() {
 
 check_coredns_replicas(){
   green ".check coredns replicas"
-
-#  local availableReplicas=$(kubectl -n kube-system get deployments.apps coredns -o jsonpath='{.status.availableReplicas}')
-#  local readyReplicas=$(kubectl -n kube-system get deployments.apps coredns -o jsonpath='{.status.readyReplicas}')
-#  local replicas=$(kubectl -n kube-system get deployments.apps coredns -o jsonpath='{.spec.replicas}')
-  local availableReplicas readyReplicas replicas
-  read -r availableReplicas readyReplicas replicas <<< "$(kubectl -n kube-system get deployments.apps coredns -o=custom-columns=:.status.availableReplicas,:.status.readyReplicas,:.spec.replicas --no-headers|awk '{print $1,$2,$3}')"
+  local availableReplicas readyReplicas replicas ready
+  read -r availableReplicas ready <<< "$(kubectl -n kube-system get deployments.apps coredns --no-headers|awk '{print $4,$2}')"
+  read -r readyReplicas replicas <<< "$(echo "$ready"|awk -F '/' '{print $1,$2}')"
   if [[ "$availableReplicas" -eq 0 ]]||[[ "$readyReplicas" -eq 0 ]];then
     red "  └──[Error] coredns availableReplicas or readyReplicas is 0 "
   elif [[ "$availableReplicas" -ne "$replicas" ]]&&[[ "$readyReplicas" -ne "$replicas" ]];then
     yellow "  └──[Warning] coredns replica is $replicas ,availableReplicas is $availableReplicas, replicas is $readyReplicas"
   else
-    green "  └──[Warning] coredns is ok，coredns replica is $replicas ,availableReplicas is $availableReplicas, replicas is $readyReplicas"
+    green "  └──[Info] coredns is ok，coredns replica is $replicas ,availableReplicas is $availableReplicas, replicas is $readyReplicas"
   fi
 }
 
@@ -373,19 +417,20 @@ check_pods_status(){
 
 check_svc_ip(){
   green ".check svc ip"
-  local svcCidrDump=$(grep -m 1 -Po '(?<=--service-cluster-ip-range=)[0-9.\/]+' $clusterInfoDumpFile)
-  local svcCidrKubeadm=$(kubeadm config view | grep serviceSubnet|awk -F ": " '{print $2}'|awk -F '"' '{print $2}')
-  local svcCidrCM=$(kubectl -n kube-system get cm kubeadm-config -o yaml|grep serviceSubnet|awk -F ": " '{print $2}')
-  if [[ $svcCidrDump == "" ]]&&[[ $svcCidrKubeadm == '""' ]];then
-    yellow "  └──[Warning] can't get service-cluster-cidr"
-    return
-  elif [[ $svcCidrDump == "" ]];then
-    local svcCidr=$svcCidrKubeadm
-  else
-    local svcCidr=$svcCidrDump
+  local svcCidr=$(kubectl get cm  -n kube-system kubeadm-config -o jsonpath='{.data.ClusterConfiguration}'|grep serviceSubnet|awk '{print $2}')
+  if [[ ${#svcCidr} -lt 9 ]];then
+    svcCidr=$(pgrep kube-api -a|awk 'NR==1{for(i=1;i<=NF;i++)if($i~/service-cluster-ip-range/)print $i}'|awk -F "=" '{print $2}')
+    if [[ ${#svcCidr} -lt 9 ]];then
+      svcCidr=$(kubeadm config view | grep serviceSubnet|awk '{print $2}')
+      if [[ ${#svcCidr} -lt 9 ]];then
+        yellow "  └──[Warning] can't get service cidr"
+        return
+      fi
+    fi
   fi
+  local netmaskNum=$(echo "$svcCidr"|awk -F '/' '{print $2}')
   local svcUsageNum=$(awk '{print $4}' "$allServiceFile"|grep -civ none)
-  local svcIpMax=$(nmap -sL -n "$svcCidr"|grep -c "Nmap scan report for")
+  local svcIpMax=$((2**(32-netmaskNum)-2))
   if [[ "$svcUsageNum" -gt $((svcIpMax * 8  / 10)) ]];then
     yellow "  └──[Warning] service ip used grater than 80%，used：$svcUsageNum，max: $svcIpMax"
   else
@@ -395,19 +440,14 @@ check_svc_ip(){
 
 check_pod_ip(){
   green ".check pod ip"
-  local podCidrDump=$(grep -m 1 -Po '(?<=--cluster-cidr=)[0-9.\/]+' $clusterInfoDumpFile)
-  local podCidrKubeadm=$(kubeadm config view | grep podSubnet|awk -F ": " '{print $2}')
-  local podCidrCM=$(kubectl -n kube-system get cm kubeadm-config -o yaml|grep podSubnet|awk -F ": " '{print $2}')
-  if [[ $podCidrDump == "" ]]&&[[ $podCidrKubeadm == '""' ]];then
-    yellow "  └──[Warning] can't get cluster-cidr"
+  local podCidr=$(curl -s 127.0.0.1:6784/status|grep Range|awk '{print $2}')
+  if [[ ${#podCidr} -lt 9 ]];then
+    yellow "  └──[Warning] can't get pod cidr"
     return
-  elif [[ $podCidrDump == "" ]];then
-    local podCidr=$podCidrKubeadm
-  else
-    local podCidr=$podCidrDump
   fi
   local ipUsageNum=$(sort "$nodeIpFile" $nodeIpFile $allPodIpFile|uniq -u|wc -l)
-  local podIpMax=$(nmap -sL -n "$podCidr"|grep -c "Nmap scan report for")
+  local netmaskNum=$(echo "$podCidr"|awk -F '/' '{print $2}')
+  local podIpMax=$((2**(32-netmaskNum)-2))
   if [[ "$ipUsageNum" -gt $((podIpMax * 8  / 10)) ]];then
     yellow "  └──[Warning] pod ip used grater than 80%，used：$ipUsageNum，max: $podIpMax"
   else
@@ -430,12 +470,20 @@ check_net(){
   while IFS= read -r svc;do
     local svcName svcIp svcPort
     read -r svcName svcIp svcPort <<< "$(echo "$svc"|awk '{print $1,$2,$3}')"
-    if ! timeout 5 kubectl exec "$tmpPodName" -- nc -z "$svcIp" "$svcPort";then
+    if ! timeout 5 kubectl exec "$tmpPodName" -- nc "$svcIp" "$svcPort";then
       red "  └──[Error] check pod -> svc [$svcName $svcIp $svcPort] error"
     else
       green "  └──[Info] check pod -> svc [$svcName $svcIp $svcPort] pass"
     fi
   done < "$svcListFile"
+  blue "└──check pod -> pod"
+  for ip in $nsPodIpList;do
+    if ! kubectl exec "$tmpPodName" -- ping "$ip" -c 2 >&/dev/null;then
+      red "  └──[Error] check pod -> pod：$ip error"
+    else
+      green "  └──[Info] check pod -> pod：$ip pass"
+    fi
+  done
   blue "└──check node -> node"
   while IFS= read -r ip;do
     if ! ping "$ip" -c 2 >&/dev/null;then
@@ -492,14 +540,15 @@ unit_conversion_mem() {
 }
 
 get_cluster_resources() {
+  green ".check node resources request"
   clusterCapacityCpu=0
   clusterCapacityMem=0
   clusterRequestsCpu=0
   clusterRequestsMem=0
-  clusterLimitsCpu=0
-  clusterLimitsMem=0
+  local clusterLimitsCpu=0
+  local clusterLimitsMem=0
   while IFS= read -r line;do
-    local nodeCapacityCpu nodeCapacityMem nodeName nodeRequestsCpu nodeRequestsMem nodeLimitsCpu nodeLimitsMem
+    local nodeCapacityCpu nodeCapacityMem nodeName nodeRequestsCpu nodeRequestsMem nodeLimitsCpu nodeLimitsMem nodeRequestsCpuPercent nodeRequestsMemPercent
     read -r nodeName nodeCapacityCpu nodeCapacityMem <<< "$(echo "$line"|awk '{print $1,$2,$3}')"
     nodeCapacityCpu=$(unit_conversion_cpu "$nodeCapacityCpu")
     nodeCapacityMem=$(unit_conversion_mem "$nodeCapacityMem")
@@ -507,12 +556,24 @@ get_cluster_resources() {
     clusterCapacityMem=$((clusterCapacityMem+nodeCapacityMem))
     local nodeDescribeFile="$healthCheckDir/$nodeName.describe"
     kubectl describe nodes "$nodeName" |sed -n '/Allocated resources/,/Events/p' > "$nodeDescribeFile"
-    read -r nodeRequestsCpu nodeLimitsCpu <<< "$(sed -n '/cpu/p' "$nodeDescribeFile"|awk '{print $2,$4}')"
+    read -r nodeRequestsCpu nodeRequestsCpuPercent nodeLimitsCpu <<< "$(sed -n '/cpu/p' "$nodeDescribeFile"|awk '{print $2,$3,$4}')"
+    local nodeRequestsCpuPercentNum=$(echo "$nodeRequestsCpuPercent"|sed 's/(//;s/%)//')
+    if [[ "$nodeRequestsCpuPercentNum" -gt "$clusterRequestCheckPercent" ]];then
+      yellow "  └──[Warning] node($nodeName) request cpu used grater than ${clusterRequestCheckPercent}%，request：$nodeRequestsCpu；max：${nodeCapacityCpu}m；percent：$(echo "$nodeRequestsCpuPercent"|sed 's/(//;s/)//')"
+    else
+      green "  └──[Info] node($nodeName) request cpu info，request：$nodeRequestsCpu；max：${nodeCapacityCpu}m；percent：$(echo "$nodeRequestsCpuPercent"|sed 's/(//;s/)//')"
+    fi
     nodeRequestsCpu=$(unit_conversion_cpu "$nodeRequestsCpu")
     nodeLimitsCpu=$(unit_conversion_cpu "$nodeLimitsCpu")
     clusterRequestsCpu=$((clusterRequestsCpu+nodeRequestsCpu))
     clusterLimitsCpu=$((clusterLimitsCpu+nodeLimitsCpu))
-    read -r nodeRequestsMem nodeLimitsMem <<< "$(sed -n '/memory/p' "$nodeDescribeFile"|awk '{print $2,$4}')"
+    read -r nodeRequestsMem nodeRequestsMemPercent nodeLimitsMem <<< "$(sed -n '/memory/p' "$nodeDescribeFile"|awk '{print $2,$3,$4}')"
+    local nodeRequestsMemPercentNum=$(echo "$nodeRequestsMemPercent"|sed 's/(//;s/%)//')
+    if [[ "$nodeRequestsMemPercentNum" -gt "$clusterRequestCheckPercent" ]];then
+      yellow "  └──[Warning] node($nodeName) request mem used grater than ${clusterRequestCheckPercent}%，request：$nodeRequestsMem；max：${nodeCapacityMem}Mi；percent：$(echo "$nodeRequestsMemPercent"|sed 's/(//;s/)//')"
+    else
+      green "  └──[Info] node($nodeName) request mem info，request：$nodeRequestsMem；max：${nodeCapacityMem}Mi；percent：$(echo "$nodeRequestsMemPercent"|sed 's/(//;s/)//')"
+    fi
     nodeRequestsMem=$(unit_conversion_mem "$nodeRequestsMem")
     nodeLimitsMem=$(unit_conversion_mem "$nodeLimitsMem")
     clusterRequestsMem=$((clusterRequestsMem+nodeRequestsMem))
@@ -521,19 +582,41 @@ get_cluster_resources() {
 }
 
 check_resources_request() {
-  green ".check resources request"
+  green ".check cluster resources request"
   local memUsedPercent=$(awk 'BEGIN{printf "%.4f\n","'"${clusterRequestsMem}"'"/"'"${clusterCapacityMem}"'"}')
   local cpuUsedPercent=$(awk 'BEGIN{printf "%.4f\n","'"${clusterRequestsCpu}"'"/"'"${clusterCapacityCpu}"'"}')
-  if [[ "$clusterRequestsMem" -gt $((clusterCapacityMem * 8 / 10)) ]];then
-    yellow "  └──[Warning] request mem used grater than 80%，used：${clusterRequestsMem}Mi，max: ${clusterCapacityMem}Mi，$(awk 'BEGIN{printf "%.0f\n","'"${memUsedPercent}"'"*100}')%"
+  if [[ "$clusterRequestsMem" -gt $((clusterCapacityMem * clusterRequestCheckPercent / 100)) ]];then
+    yellow "  └──[Warning] cluster request mem used grater than ${clusterRequestCheckPercent}%，used：${clusterRequestsMem}Mi，max: ${clusterCapacityMem}Mi，$(awk 'BEGIN{printf "%.0f\n","'"${memUsedPercent}"'"*100}')%"
   else
-    green "  └──[Info] request mem used：${clusterRequestsMem}Mi，max: ${clusterCapacityMem}Mi，$(awk 'BEGIN{printf "%.0f\n","'"${memUsedPercent}"'"*100}')%"
+    green "  └──[Info] cluster request mem used：${clusterRequestsMem}Mi，max: ${clusterCapacityMem}Mi，$(awk 'BEGIN{printf "%.0f\n","'"${memUsedPercent}"'"*100}')%"
   fi
-  if [[ "$clusterRequestsCpu" -gt $((clusterCapacityCpu * 8 / 10)) ]];then
-    yellow "  └──[Warning] request cpu used grater than 80%，used：${clusterRequestsCpu}m，max: ${clusterCapacityCpu}m，$(awk 'BEGIN{printf "%.0f\n","'"${cpuUsedPercent}"'"*100}')%"
+  if [[ "$clusterRequestsCpu" -gt $((clusterCapacityCpu * clusterRequestCheckPercent / 100)) ]];then
+    yellow "  └──[Warning] cluster request cpu used grater than ${clusterRequestCheckPercent}%，used：${clusterRequestsCpu}m，max: ${clusterCapacityCpu}m，$(awk 'BEGIN{printf "%.0f\n","'"${cpuUsedPercent}"'"*100}')%"
   else
-    green "  └──[Info] request cpu used ${clusterRequestsCpu}m，max ${clusterCapacityCpu}m，$(awk 'BEGIN{printf "%.0f\n","'"${cpuUsedPercent}"'"*100}')%"
+    green "  └──[Info] cluster request cpu used ${clusterRequestsCpu}m，max ${clusterCapacityCpu}m，$(awk 'BEGIN{printf "%.0f\n","'"${cpuUsedPercent}"'"*100}')%"
   fi
+}
+
+check_weave_status() {
+  green ".check weave status"
+  while IFS= read -r weave;do
+    local weaveName weaveReady weaveStatus nodeIp nodeName ipamStatus
+    read -r weaveName weaveReady weaveStatus nodeIp nodeName <<< "$(echo "$weave"|awk '{print $1,$2,$3,$6,$7}')"
+    ipamStatus=$(kubectl -n kube-system exec "$weaveName" -c weave -- /home/weave/weave --local status|grep Status|awk '{print $2}')
+    if [[ "$weaveReady" == "2/2" ]];then
+      if [[ "$weaveStatus" == "Running" ]];then
+        if [[ "$ipamStatus" == "ready" ]];then
+          green "  └──[Info] node：$nodeName $nodeIp，pod：$weaveName $weaveReady $weaveStatus，ipam：$ipamStatus is healthy"
+        else
+          red "  └──[Error] node：$nodeName $nodeIp，pod：$weaveName $weaveReady $weaveStatus，ipam：$ipamStatus"
+        fi
+      else
+        red "  └──[Error] node：$nodeName $nodeIp，pod：$weaveName $weaveReady $weaveStatus，ipam：$ipamStatus"
+      fi
+    else
+      red "  └──[Error] node：$nodeName $nodeIp，pod：$weaveName $weaveReady $weaveStatus，ipam：$ipamStatus"
+    fi
+  done < "$weavePodsFile"
 }
 
 # all nodes check
@@ -541,7 +624,6 @@ check_conntrack(){
   green ".check conntrack"
   local nfConntrackCount="$(cat /proc/sys/net/netfilter/nf_conntrack_count)"
   local nfConntrackMax="$(cat /proc/sys/net/netfilter/nf_conntrack_max)"
-  # nf_conntrack_usage_rate=$(echo "sclae=2; $nfConntrackCount/$nf_conntrack_max" | bc)
   local nfConntrackUsageRate=$(awk 'BEGIN{printf "%.4f\n","'"${nfConntrackCount}"'"/"'"${nfConntrackMax}"'"}')
   if [ "$(expr "${nfConntrackUsageRate}" \> 0.8)" -eq 1 ];then
     yellow "  └──[Warning] conntrack used grater than 80%，$nfConntrackUsageRate"
@@ -585,29 +667,9 @@ check_node_to_apiserver(){
   fi
 }
 
-# master and etcd 节点
-check_command
-check_check_pod
-get_check_data
+#get_check_data
 check_kube-apiserver
 check_kube-controller-manager
 check_kube-scheduler
 check_etcd
 check_cert
-check_coredns_replicas
-check_dns
-check_node_status
-check_pods_status
-check_svc_ip
-check_pod_ip
-check_net
-get_cluster_resources
-check_resources_request
-
-# all node
-#check_conntrack
-#check_containerd
-#check_kubelet_cert
-#check_node_dns
-#check_node_to_apiserver
-kubectl delete pods "$tmpPodName" --force >& /dev/null
