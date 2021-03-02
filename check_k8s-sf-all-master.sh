@@ -16,7 +16,7 @@ clusterRequestCheckPercent=80
 busyboxImage="busybox:1.27.2"
 healthCheckDir="/tmp/healthCheck"
 k8sConfDir="/etc/kubernetes"
-externalDomain=("www.sina.com" "www.baidu.com" "www.fujiangong.com" "lucky fjg")
+externalDomain=("www.sina.com" "www.baidu.com" "www.fujiangong.com")
 internalDomain=("kubernetes.default" "kube-dns.kube-system.svc.cluster.local")
 podStatusCheck=("Running" "Completed" "CrashLoopBackOff" "ImagePullBackOff" "ContainerCreating" "Terminating" "Error")
 machineId=$(cat /etc/machine-id)
@@ -30,27 +30,31 @@ if [ ! -d "$healthCheckDir" ]; then
 fi
 
 blue(){
-    echo -e "\033[34m $1 \033[0m"
+#  echo -e "\033[34m $1 \033[0m"
+  echo "$1"
 }
 
 green(){
-    echo -e "\033[32m $1 \033[0m"
+#  echo -e "\033[32m $1 \033[0m"
+  echo "$1"
 }
 
 bred(){
-    echo -e "\033[31m\033[01m\033[05m $1 \033[0m"
+  echo -e "\033[31m\033[01m\033[05m $1 \033[0m"
 }
 
 byellow(){
-    echo -e "\033[33m\033[01m\033[05m $1 \033[0m"
+  echo -e "\033[33m\033[01m\033[05m $1 \033[0m"
 }
 
 red(){
-    echo -e "\033[31m\033[01m $1 \033[0m"
+#  echo -e "\033[31m\033[01m $1 \033[0m"
+  echo "$1"
 }
 
 yellow(){
-    echo -e "\033[33m\033[01m $1 \033[0m"
+#  echo -e "\033[33m\033[01m $1 \033[0m"
+  echo "$1"
 }
 
 check_command(){
@@ -128,7 +132,7 @@ get_check_data() {
   kubectl get pods -n kube-system -l name=weave-net -o wide --no-headers > "$weavePodsFile"
 }
 
-check_kube-apiserver() {
+check_kube_apiserver() {
   green ".check apiserver"
   blue "└──check apiserver process"
   if ! ss -ntlp|grep kube-api > /dev/null; then
@@ -161,7 +165,7 @@ check_kube-apiserver() {
   fi
 }
 
-check_kube-scheduler() {
+check_kube_scheduler() {
   green ".check kube-scheduler"
   blue "└──check apiserver process"
   if ! ss -ntlp|grep kube-schedule > /dev/null; then
@@ -194,7 +198,7 @@ check_kube-scheduler() {
   fi
 }
 
-check_kube-controller-manager() {
+check_kube_controller_manager() {
   green ".check kube-controll"
   blue "└──check kube-controll process"
   if ! ss -ntlp|grep kube-controll > /dev/null; then
@@ -258,7 +262,7 @@ check_etcd() {
     done < "$endpointHealthFile"
     blue "└──check etcd [Error] log"
     local etcdLogFile="$healthCheckDir/etcd.log"
-    journalctl -x --since "$(date +%F -d "$logCheckDay days ago")" -u etcd 1 >$etcdLogFile
+    journalctl -x --since "$(date +%F -d "$logCheckDay days ago")" -u etcd 1>$etcdLogFile
     local errorLogFile="$healthCheckDir/etcd-error.log"
     grep "E |" "$etcdLogFile" > $errorLogFile
     if [[ -s "$errorLogFile" ]];then
@@ -668,8 +672,8 @@ check_node_to_apiserver(){
 }
 
 #get_check_data
-check_kube-apiserver
-check_kube-controller-manager
-check_kube-scheduler
+check_kube_apiserver
+check_kube_controller_manager
+check_kube_scheduler
 check_etcd
 check_cert

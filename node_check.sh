@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ ! -d /tmp/healthCheck ]; then
-  mkdir -p /tmp/healthCheck 
+  mkdir -p /tmp/healthCheck
 fi
 
 logCheckDays=7

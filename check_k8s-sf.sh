@@ -14,11 +14,12 @@ logCheckDay=1
 certCheckDay=14
 podRestartCheckNum=20
 clusterRequestCheckPercent=80
-busyboxImage="busybox:1.27.2"
+nodeLabel="sfke.role.kubernetes.io/group=general-worker"
+busyboxImage="cloudpricicd.sf-express.com/docker-k8sprivate-local/busybox:latest"
 healthCheckDir="/tmp/healthCheck"
 k8sConfDir="/etc/kubernetes"
-externalDomain=("www.sina.com" "www.baidu.com" "www.fujiangong.com" "lucky fjg")
-internalDomain=("kubernetes.default" "kube-dns.kube-system.svc.cluster.local")
+externalDomain=("www.sf-express.com")
+internalDomain=("kubernetes.default" "kube-dns.kube-system.svc.cluster.local" "www.sf-express.com")
 podStatusCheck=("Running" "Completed" "CrashLoopBackOff" "ImagePullBackOff" "ContainerCreating" "Terminating" "Error")
 machineId=$(cat /etc/machine-id)
 tmpPodName="check-pod-$machineId-$(date +%F)"
@@ -31,27 +32,31 @@ if [ ! -d "$healthCheckDir" ]; then
 fi
 
 blue(){
-    echo -e "\033[34m $1 \033[0m"
+#  echo -e "\033[34m $1 \033[0m"
+  echo "$1"
 }
 
 green(){
-    echo -e "\033[32m $1 \033[0m"
+#  echo -e "\033[32m $1 \033[0m"
+  echo "$1"
 }
 
 bred(){
-    echo -e "\033[31m\033[01m\033[05m $1 \033[0m"
+  echo -e "\033[31m\033[01m\033[05m $1 \033[0m"
 }
 
 byellow(){
-    echo -e "\033[33m\033[01m\033[05m $1 \033[0m"
+  echo -e "\033[33m\033[01m\033[05m $1 \033[0m"
 }
 
 red(){
-    echo -e "\033[31m\033[01m $1 \033[0m"
+#  echo -e "\033[31m\033[01m $1 \033[0m"
+  echo "$1"
 }
 
 yellow(){
-    echo -e "\033[33m\033[01m $1 \033[0m"
+#  echo -e "\033[33m\033[01m $1 \033[0m"
+  echo "$1"
 }
 
 check_command(){
@@ -108,7 +113,7 @@ get_check_data() {
   awk '{print $6}' "$allNodeFile" > "$nodeIpFile"
   blue "└──get node capacity"
   nodeCapacityFile="$healthCheckDir/nodeCapacity.txt"
-  kubectl get nodes -o custom-columns=NAME:.metadata.name,CPU:.status.capacity.cpu,MEM:.status.capacity.memory --no-headers > "$nodeCapacityFile"
+  kubectl get nodes -o custom-columns=NAME:.metadata.name,CPU:.status.capacity.cpu,MEM:.status.capacity.memory --no-headers --selector "$nodeLabel"> "$nodeCapacityFile"
   blue "└──get all pods info"
   allPodsFile="$healthCheckDir/allPodList.txt"
   kubectl get pods --all-namespaces --no-headers -owide >& "$allPodsFile"
@@ -129,7 +134,7 @@ get_check_data() {
   kubectl get pods -n kube-system -l name=weave-net -o wide --no-headers > "$weavePodsFile"
 }
 
-check_kube-apiserver() {
+check_kube_apiserver() {
   green ".check apiserver"
   blue "└──check apiserver process"
   if ! ss -ntlp|grep kube-api > /dev/null; then
@@ -162,7 +167,7 @@ check_kube-apiserver() {
   fi
 }
 
-check_kube-scheduler() {
+check_kube_scheduler() {
   green ".check kube-scheduler"
   blue "└──check apiserver process"
   if ! ss -ntlp|grep kube-schedule > /dev/null; then
@@ -195,7 +200,7 @@ check_kube-scheduler() {
   fi
 }
 
-check_kube-controller-manager() {
+check_kube_controller_manager() {
   green ".check kube-controll"
   blue "└──check kube-controll process"
   if ! ss -ntlp|grep kube-controll > /dev/null; then
@@ -259,7 +264,7 @@ check_etcd() {
     done < "$endpointHealthFile"
     blue "└──check etcd [Error] log"
     local etcdLogFile="$healthCheckDir/etcd.log"
-    journalctl -x --since "$(date +%F -d "$logCheckDay days ago")" -u etcd 1 >$etcdLogFile
+    journalctl -x --since "$(date +%F -d "$logCheckDay days ago")" -u etcd 1>$etcdLogFile
     local errorLogFile="$healthCheckDir/etcd-error.log"
     grep "E |" "$etcdLogFile" > $errorLogFile
     if [[ -s "$errorLogFile" ]];then
@@ -313,6 +318,7 @@ check_conf_cert(){
     local configAuthCert="$healthCheckDir/$configFile.crt"
   fi
   check_cert_time "$configAuthCert"
+  echo " " > "$healthCheckDir"/"$configFile".crt
 }
 
 check_cert() {
@@ -382,6 +388,7 @@ check_dns(){
   blue "└──check node dns"
   check_node_dns
   blue "└──check pod dns"
+  check_check_pod
   check_pod_dns
 }
 
@@ -401,26 +408,26 @@ check_node_status(){
 check_pods_status(){
   green ".check pods status"
   for status in "${podStatusCheck[@]}";do
-    local num=$(grep -c "$status" "$allPodsFile")
+    local num=$(awk -v podStatus="$status" 'BEGIN{count=0}{if($1=="kube-system" && $4==podStatus)count++}END{print count}' "$allPodsFile")
     if [[ "$status" == "Running" ]]||[[ "$status" == "Completed" ]];then
-      green "  └──[Info] $num pods is $status"
+      green "  └──[Info] kube-system $num pods is $status"
     elif [[ "$num" -ne 0 ]];then
-      red "  └──[Error] $num pods is $status"
-      red "$(grep "$status" "$allPodsFile"|sed s'/^/      /')"
+      red "  └──[Error] kube-system $num pods is $status"
+      red "$(awk -v podStatus="$status" '{if($1=="kube-system" && $4==podStatus) print $0}' "$allPodsFile"|sed s'/^/      /')"
     fi
   done
-  local restartPodNum=$(awk -v restartNum=$podRestartCheckNum '{if($5>restartNum) print $0}' "$allPodsFile"|wc -l)
+  local restartPodNum=$(awk -v restartNum=$podRestartCheckNum 'BEGIN{count=0}{if($1=="kube-system" && $5>restartNum)count++}END{print count}' "$allPodsFile")
   if [[ "$restartPodNum" -ne 0 ]];then
     red "  └──[Error] $restartPodNum pods is restart > $podRestartCheckNum"
-    red "$(awk -v restartNum=$podRestartCheckNum '{if($5>restartNum) print $0}' $allPodsFile|sed s'/^/      /')"
+    red "$(awk -v restartNum=$podRestartCheckNum '{if($1=="kube-system" && $5>restartNum) print $0}' $allPodsFile|sed s'/^/      /')"
   fi
 }
 
 check_svc_ip(){
   green ".check svc ip"
-  local svcCidr=$(kubectl get cm  -n kube-system kubeadm-config -o jsonpath='{.data.ClusterConfiguration}'|grep serviceSubnet|awk '{print $2}')
+  local svcCidr=$(pgrep kube-api -a|awk 'NR==1{for(i=1;i<=NF;i++)if($i~/service-cluster-ip-range/)print $i}'|awk -F "=" '{print $2}')
   if [[ ${#svcCidr} -lt 9 ]];then
-    svcCidr=$(pgrep kube-api -a|awk 'NR==1{for(i=1;i<=NF;i++)if($i~/service-cluster-ip-range/)print $i}'|awk -F "=" '{print $2}')
+    svcCidr=$(kubectl get cm  -n kube-system kubeadm-config -o jsonpath='{.data.ClusterConfiguration}'|grep serviceSubnet|awk '{print $2}')
     if [[ ${#svcCidr} -lt 9 ]];then
       svcCidr=$(kubeadm config view | grep serviceSubnet|awk '{print $2}')
       if [[ ${#svcCidr} -lt 9 ]];then
@@ -601,21 +608,21 @@ check_resources_request() {
 check_weave_status() {
   green ".check weave status"
   while IFS= read -r weave;do
-    local weaveName weaveReady weaveStatus nodeIp nodeName ipamStatus
+    local weaveName weaveReady weaveStatus nodeIp nodeName
     read -r weaveName weaveReady weaveStatus nodeIp nodeName <<< "$(echo "$weave"|awk '{print $1,$2,$3,$6,$7}')"
-    ipamStatus=$(kubectl -n kube-system exec "$weaveName" -c weave -- /home/weave/weave --local status|grep Status|awk '{print $2}')
+#    ipamStatus=$(kubectl -n kube-system exec "$weaveName" -c weave -- /home/weave/weave --local status|grep Status|awk '{print $2}')
     if [[ "$weaveReady" == "2/2" ]];then
       if [[ "$weaveStatus" == "Running" ]];then
-        if [[ "$ipamStatus" == "ready" ]];then
-          green "  └──[Info] node：$nodeName $nodeIp，pod：$weaveName $weaveReady $weaveStatus，ipam：$ipamStatus is healthy"
-        else
-          red "  └──[Error] node：$nodeName $nodeIp，pod：$weaveName $weaveReady $weaveStatus，ipam：$ipamStatus"
-        fi
+#        if [[ "$ipamStatus" == "ready" ]];then
+        green "  └──[Info] node：$nodeName $nodeIp，pod：$weaveName $weaveReady $weaveStatus"
+#        else
+#        red "  └──[Error] node：$nodeName $nodeIp，pod：$weaveName $weaveReady $weaveStatus，ipam：$ipamStatus"
+#        fi
       else
-        red "  └──[Error] node：$nodeName $nodeIp，pod：$weaveName $weaveReady $weaveStatus，ipam：$ipamStatus"
+        red "  └──[Error] node：$nodeName $nodeIp，pod：$weaveName $weaveReady $weaveStatus"
       fi
     else
-      red "  └──[Error] node：$nodeName $nodeIp，pod：$weaveName $weaveReady $weaveStatus，ipam：$ipamStatus"
+      red "  └──[Error] node：$nodeName $nodeIp，pod：$weaveName $weaveReady $weaveStatus"
     fi
   done < "$weavePodsFile"
 }
@@ -670,7 +677,6 @@ check_node_to_apiserver(){
 
 # master and etcd 节点
 check_command
-check_check_pod
 get_check_data
 #check_kube-apiserver
 #check_kube-controller-manager
@@ -678,16 +684,16 @@ get_check_data
 #check_etcd
 #check_cert
 check_coredns_replicas
-check_dns
 check_node_status
 check_pods_status
 check_svc_ip
 check_pod_ip
-check_net
+#check_net
 get_cluster_resources
 check_resources_request
 check_weave_status
-
+#check_check_pod
+check_dns
 # all node
 #check_conntrack
 #check_containerd
